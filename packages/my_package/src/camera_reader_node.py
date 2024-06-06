@@ -15,54 +15,55 @@ from typing import Tuple
 class CameraReaderNode(DTROS):
 
     def detect_lane_markings(self, image: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-        """
-        Args:
-            image: An image from the robot's camera in the BGR color space (numpy.ndarray)
-        Return:
-            left_masked_img:   Masked image for the dashed-yellow line (numpy.ndarray)
-            right_masked_img:  Masked image for the solid-white line (numpy.ndarray)
-        """
-        h, w, _ = image.shape
+        # Apply bilateral filter to the image
+        image = cv2.bilateralFilter(image, 12, 125, 155)
+        
+        # Split the image into left and right halves
+        height, width, _ = image.shape
+        left_half = image[:, :width//2]
+        right_half = image[:, width//2:]     
+
+        gray = cv2.cvtColor(right_half, cv2.COLOR_BGR2GRAY)  
+
+        # Define color range for yellow
+        yellow_lower_color = np.array([9, 100, 0])
+        yellow_upper_color = np.array([80, 255, 255])
+        # Define color range for white
+        # white_lower_color = np.array([0, 0, 150])9 148 155 83 355 355
+        # # white_upper_color = np.array([255, 60, 255])
+        # white_lower_color = np.array([170, 80, 87]) #0 173 0
+        # white_upper_color = np.array([270, 99, 185]) #179 255 255 hsl
+        # white_lower_color = np.array([0, 173, 0])
+        # white_upper_color = np.array([180, 255, 255])
+        white_lower_color = np.array([0, 177, 0])
+        white_upper_color = np.array([255, 255, 120])
+
+        # Convert left half to HSV and right half to HLS
+        hsv_left = cv2.cvtColor(left_half, cv2.COLOR_BGR2HSV)
+        # hsl_right = cv2.cvtColor(right_half, cv2.COLOR_BGR2HLS)
+        # l_channel = hsl_right[:,:,1]
+        hls_right = cv2.cvtColor(right_half, cv2.COLOR_BGR2HLS)
+        # Split HLS image into its channels
+        # h_channel, l_channel, s_channel = cv2.split(hls_right)
+
+
+        # Create masks for yellow and white colors
+        mask_yellow_left = cv2.inRange(hsv_left, yellow_lower_color, yellow_upper_color)
+        mask_white_right = cv2.inRange(hls_right, white_lower_color, white_upper_color)
+        # mask = cv2.inRange(l_channel, 180, 255)
+
+        # Create result images
+        result_left = cv2.bitwise_and(left_half, left_half, mask=mask_yellow_left)
+        # result_right = cv2.bitwise_and(right_half, right_half, mask=mask_white_right)
+        # result_right = cv2.bitwise_and(right_half, right_half, mask=mask_white_right)
+        result_right = cv2.threshold(gray, 62, 255, cv2.THRESH_BINARY)
+
+
+        result_left[:height//3] = 0
+        # result_right[:height//3] = 0
+
+        return result_left, result_right
     
-        consta = 100
-        white_lower_color = np.array([0,0,255-consta])
-        white_upper_color = np.array([255,consta,255])
-        yellow_lower_color = np.array([10,50,80])
-        yellow_upper_color = np.array([30,255,255])
-    
-        img_hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
-        img_gray_scale = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    
-    
-        gaussian_blur = cv2.GaussianBlur(img_gray_scale, (0,0), np.pi)
-        sobel_x_crd = cv2.Sobel(gaussian_blur, cv2.CV_64F,1,0)
-        sobel_y_crd = cv2.Sobel(gaussian_blur, cv2.CV_64F,0,1)
-        G = np.sqrt(sobel_x_crd*sobel_x_crd + sobel_y_crd*sobel_y_crd)
-    
-        threshold_w = 27
-        threshold_y = 47
-    
-        mask_bool_white = (G > threshold_w)
-        mask_bool_yellow = (G > threshold_y)
-    
-        real_mask_white = cv2.inRange(img_hsv, white_lower_color, white_upper_color)
-        real_mask_yellow = cv2.inRange(img_hsv, yellow_lower_color, yellow_upper_color)
-    
-        left_mask = np.ones(sobel_x_crd.shape)
-        left_mask[:,int(np.floor(w/2)):w+1] = 0
-        right_mask = np.ones(sobel_x_crd.shape)
-        right_mask[:,0:int(np.floor(w/2))] = 0
-        left_mask[:int(sobel_x_crd.shape[0]/2)] = 0
-        right_mask[:int(sobel_x_crd.shape[0]/2)] = 0
-        sobel_x_pos_mask = (sobel_x_crd > 0)
-        sobel_x_neg_mask = (sobel_x_crd < 0)
-        sobel_y_pos_mask = (sobel_y_crd > 0)
-        sobel_y_neg_mask = (sobel_y_crd < 0)
-    
-        left_edge_mask = left_mask * mask_bool_yellow * sobel_x_neg_mask * sobel_y_neg_mask * real_mask_yellow
-        right_edge_mask = right_mask * mask_bool_white * sobel_x_pos_mask * sobel_y_neg_mask * real_mask_white
-    
-        return  left_edge_mask + right_edge_mask
 
     def __init__(self, node_name):
         # initialize the DTROS parent class
@@ -74,6 +75,7 @@ class CameraReaderNode(DTROS):
         self._bridge = CvBridge()
         # create window
         self._window = "camera-reader"
+        self._window2 = "second-camera-reader"
         cv2.namedWindow(self._window, cv2.WINDOW_AUTOSIZE)
         # construct subscriber
         self.sub = rospy.Subscriber(self._camera_topic, CompressedImage, self.callback)
@@ -83,11 +85,14 @@ class CameraReaderNode(DTROS):
     def callback(self, msg):
         # convert JPEG bytes to CV image
         image = self._bridge.compressed_imgmsg_to_cv2(msg)
-        image = self.detect_lane_markings(image)
+        left, right = self.detect_lane_markings(image)
+        concatenated_img = np.hstack((left, right))
+        concatenated_img_msg = self._bridge.cv2_to_compressed_imgmsg(concatenated_img)
         # publish the image
-        self.pub.publish(msg)
+        self.pub.publish(concatenated_img_msg)
         # display frame
-        cv2.imshow(self._window, image)
+        cv2.imshow(self._window, concatenated_img)
+        cv2.imshow(self._window2, image)
         cv2.waitKey(1)
 
 if __name__ == '__main__':
