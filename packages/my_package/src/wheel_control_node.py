@@ -35,9 +35,65 @@ class WheelControlNode(DTROS):
         # construct publisher
         self._publisher = rospy.Publisher(wheels_topic, WheelsCmdStamped, queue_size=1)
         self.sub = rospy.Subscriber("eyes", CompressedImage, self.callback)
+        self.sub2 = rospy.Subscriber("eyes2", CompressedImage, self.callback2)
+        self.stopped = False
 
+    def callback2(self, msg):
+        # convert JPEG bytes to CV image
+        image = self._bridge.compressed_imgmsg_to_cv2(msg)
+        self.stopped = not self.stopped
+        # rospy.loginfo(f"{image.shape}")
+
+        
+        hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+        lower_red1 = np.array([0, 100, 100])
+        upper_red1 = np.array([10, 255, 255])
+        lower_red2 = np.array([160, 100, 100])
+        upper_red2 = np.array([180, 255, 255])
+
+        mask1 = cv2.inRange(hsv, lower_red1, upper_red1)
+        mask2 = cv2.inRange(hsv, lower_red2, upper_red2)
+
+        red_mask = cv2.bitwise_or(mask1, mask2)
+
+        output_frame = cv2.bitwise_and(image, image, mask=red_mask)
+
+        h, _, _ = image.shape
+        start_row = 14 * h // 15
+        bottom_third = np.zeros_like(output_frame)
+        bottom_third[start_row:, :] = output_frame[start_row:, :]
+
+        black_pixel = [0, 0, 0]
+        non_black_indices = np.nonzero(np.any(output_frame[start_row:] != black_pixel, axis=-1))
+        red_appears = len(non_black_indices[0]) > 0        
+    
+        if red_appears and self._red:
+            # rospy.loginfo("Non-black pixels detected in the bottom third of the image")
+            self._red = False
+            self._vel_left = 0
+            self._vel_right = 0
+            message = WheelsCmdStamped(vel_left=0, vel_right=0)
+            self._publisher.publish(message)
+            self.stopped = True
+            red_appears = False
+            rospy.sleep(1)
+            self._vel_left = 0.4
+            self._vel_right = 0.1
+            message = WheelsCmdStamped(vel_left=0.4, vel_right=0.1)
+            self._publisher.publish(message)
+            rospy.sleep(3)
+        elif red_appears and not self._red:
+            self._vel_left = 0.4
+            self._vel_right = 0.1
+            message = WheelsCmdStamped(vel_left=0.4, vel_right=0.1)
+        elif not red_appears:
+            self._red = True
+            self.stopped = False
 
     def callback(self, msg):
+        if self.stopped:
+            return
+
         concatenated_images = self._bridge.compressed_imgmsg_to_cv2(msg)
         height, width, _ = concatenated_images.shape
         left_image = concatenated_images[:, :width//2]
@@ -57,21 +113,20 @@ class WheelControlNode(DTROS):
 
         if(left_non_zero_count > right_non_zero_count):
             right_motor -= 0.2
-            right_motor = 0.25 if right_motor < 0.25 else right_motor
+            right_motor = 0.2 if right_motor < 0.2 else right_motor
 
             left_motor += 0.25
-            left_motor = 0.35 if left_motor > 0.35 else left_motor
+            left_motor = 0.45 if left_motor > 0.45 else left_motor
 
             message = WheelsCmdStamped(vel_left=left_motor, vel_right=right_motor)
             self._publisher.publish(message)
 
         elif(left_non_zero_count < right_non_zero_count):
             left_motor -= 0.2
-            left_motor = 0.25 if left_motor < 0.25 else left_motor
+            left_motor = 0.2 if left_motor < 0.2 else left_motor
 
             right_motor += 0.25
-            right_motor = 0.35 if right_motor > 0.35 else right_motor
-
+            right_motor = 0.45 if right_motor > 0.45 else right_motor
 
             message = WheelsCmdStamped(vel_left=left_motor, vel_right=right_motor)
             self._publisher.publish(message)   
@@ -83,7 +138,7 @@ class WheelControlNode(DTROS):
         self._vel_left = left_motor
         self._vel_right = right_motor
 
-        rospy.loginfo(f"I heard {left_motor}, {right_motor}")
+        rospy.loginfo(f"I heard {left_motor}, {right_motor}, {self.stopped}")
 
 
     def run(self):

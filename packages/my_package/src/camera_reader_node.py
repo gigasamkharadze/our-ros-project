@@ -15,55 +15,39 @@ from typing import Tuple
 class CameraReaderNode(DTROS):
 
     def detect_lane_markings(self, image: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-        # Apply bilateral filter to the image
         image = cv2.bilateralFilter(image, 12, 125, 155)
         
-        # Split the image into left and right halves
         height, width, _ = image.shape
         left_half = image[:, :width//2]
         right_half = image[:, width//2:]     
 
-        gray = cv2.cvtColor(right_half, cv2.COLOR_BGR2GRAY)  
+        right_half_gray = cv2.cvtColor(right_half, cv2.COLOR_BGR2GRAY)  
 
-        # Define color range for yellow
         yellow_lower_color = np.array([9, 100, 0])
         yellow_upper_color = np.array([80, 255, 255])
-        # Define color range for white
-        # white_lower_color = np.array([0, 0, 150])9 148 155 83 355 355
-        # # white_upper_color = np.array([255, 60, 255])
-        # white_lower_color = np.array([170, 80, 87]) #0 173 0
-        # white_upper_color = np.array([270, 99, 185]) #179 255 255 hsl
-        # white_lower_color = np.array([0, 173, 0])
-        # white_upper_color = np.array([180, 255, 255])
-        white_lower_color = np.array([0, 177, 0])
-        white_upper_color = np.array([255, 255, 120])
+        # white_lower_color = np.array([0, 177, 0])
+        # white_upper_color = np.array([255, 255, 120])
 
-        # Convert left half to HSV and right half to HLS
         hsv_left = cv2.cvtColor(left_half, cv2.COLOR_BGR2HSV)
-        # hsl_right = cv2.cvtColor(right_half, cv2.COLOR_BGR2HLS)
-        # l_channel = hsl_right[:,:,1]
-        hls_right = cv2.cvtColor(right_half, cv2.COLOR_BGR2HLS)
-        # Split HLS image into its channels
+        # hls_right = cv2.cvtColor(right_half, cv2.COLOR_BGR2HLS)
         # h_channel, l_channel, s_channel = cv2.split(hls_right)
 
 
-        # Create masks for yellow and white colors
         mask_yellow_left = cv2.inRange(hsv_left, yellow_lower_color, yellow_upper_color)
-        mask_white_right = cv2.inRange(hls_right, white_lower_color, white_upper_color)
-        # mask = cv2.inRange(l_channel, 180, 255)
+        # mask_white_right = cv2.inRange(hls_right, white_lower_color, white_upper_color)
 
-        # Create result images
         result_left = cv2.bitwise_and(left_half, left_half, mask=mask_yellow_left)
         # result_right = cv2.bitwise_and(right_half, right_half, mask=mask_white_right)
-        # result_right = cv2.bitwise_and(right_half, right_half, mask=mask_white_right)
-        result_right = cv2.threshold(gray, 62, 255, cv2.THRESH_BINARY)
-
+        # result_right = cv2.threshold(gray, 62, 255, cv2.THRESH_BINARY)
+        # Apply binary threshold to the grayscale image
+        _, binary = cv2.threshold(right_half_gray, 177, 255, cv2.THRESH_BINARY)
+        binary_rgb = cv2.merge([binary, binary, binary])
+        result_right = cv2.bitwise_and(right_half, binary_rgb)
 
         result_left[:height//3] = 0
-        # result_right[:height//3] = 0
+        result_right[:height//3] = 0
 
         return result_left, result_right
-    
 
     def __init__(self, node_name):
         # initialize the DTROS parent class
@@ -81,9 +65,12 @@ class CameraReaderNode(DTROS):
         self.sub = rospy.Subscriber(self._camera_topic, CompressedImage, self.callback)
         # construct publisher
         self.pub = rospy.Publisher("eyes", CompressedImage, queue_size=10)
+        self.pub2 = rospy.Publisher("eyes2", CompressedImage, queue_size=10)
+
 
     def callback(self, msg):
         # convert JPEG bytes to CV image
+        self.pub2.publish(msg)
         image = self._bridge.compressed_imgmsg_to_cv2(msg)
         left, right = self.detect_lane_markings(image)
         concatenated_img = np.hstack((left, right))
